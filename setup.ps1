@@ -208,3 +208,5 @@ if ($rdId) {
     Write-Host "2. На удалённом ПК открой RustDesk и посмотри ID" -ForegroundColor White
     Write-Host "3. Введи ID на своём ПК, пароль: 12345678" -ForegroundColor White
 }
+    Write-Host "3. Введи ID на своём ПК, пароль: 12345678" -ForegroundColor White
+}
