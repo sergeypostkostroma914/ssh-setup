@@ -33,9 +33,13 @@ Write-Host "SSH сервер запущен!" -ForegroundColor Green
 
 # --- ШАГ 3: Создание SSH ключа ---
 Write-Host "`n[3/6] Создание SSH ключа..." -ForegroundColor Yellow
-$keyPath = "$env:USERPROFILE\.ssh\id_ed25519"
+$sshDir = "$env:USERPROFILE\.ssh"
+$keyPath = "$sshDir\id_ed25519"
+if (!(Test-Path $sshDir)) {
+    New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
+}
 if (!(Test-Path $keyPath)) {
-    ssh-keygen -t ed25519 -C "tunnel-key" -f $keyPath -N '""'
+    ssh-keygen -t ed25519 -C "tunnel-key" -f $keyPath -N ""
     Write-Host "SSH ключ создан!" -ForegroundColor Green
 } else {
     Write-Host "SSH ключ уже существует, пропускаю." -ForegroundColor Green
