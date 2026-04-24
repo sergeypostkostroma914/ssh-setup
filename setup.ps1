@@ -203,10 +203,20 @@ Register-ScheduledTask -TaskName "SSH Tunnel" -Action $action -Trigger $trigger 
 Start-ScheduledTask -TaskName "SSH Tunnel"
 Write-Host "Туннель запущен!" -ForegroundColor Green
 
-Start-Sleep -Seconds 3
+# Перезапустить RustDesk и подождать ID
+Write-Host "`nПолучаю ID RustDesk..." -ForegroundColor Cyan
+Start-Service "RustDesk" -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 5
+
 $rdId = ""
-if (Test-Path $rustdeskExe) {
+$attempts = 0
+while ([string]::IsNullOrEmpty($rdId) -and $attempts -lt 5) {
     try { $rdId = (& $rustdeskExe --get-id 2>$null).Trim() } catch {}
+    if ([string]::IsNullOrEmpty($rdId)) {
+        Write-Host "Жду..." -ForegroundColor Gray
+        Start-Sleep -Seconds 3
+    }
+    $attempts++
 }
 
 Write-Host "`n========================================" -ForegroundColor Cyan
