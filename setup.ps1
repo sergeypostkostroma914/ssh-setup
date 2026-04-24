@@ -24,12 +24,12 @@ function Download-File {
     } catch { return $false }
 }
 
-# --- Выбор порта ---
-Write-Host "`nВведи порт (по умолчанию 2224, если занят введи 2225, 2226...):" -ForegroundColor Cyan
-$portInput = Read-Host "Порт"
-if ([string]::IsNullOrWhiteSpace($portInput)) { $SSH_PORT = 2224 }
-else { $SSH_PORT = [int]$portInput }
-Write-Host "Порт: $SSH_PORT" -ForegroundColor Green
+# --- Запросить пароль VPS ---
+Write-Host "`nВведи пароль от VPS (он нужен один раз чтобы добавить ключ):" -ForegroundColor Cyan
+$vpsPasswordSecure = Read-Host "Пароль VPS" -AsSecureString
+$vpsPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+    [Runtime.InteropServices.Marshal]::SecureStringToBSTR($vpsPasswordSecure)
+)
 
 # --- ШАГ 1: OpenSSH ---
 Write-Host "`n[1/6] Установка OpenSSH..." -ForegroundColor Yellow
@@ -44,6 +44,12 @@ if (!(Test-Path $sshExe)) {
 $env:PATH += ";C:\OpenSSH\OpenSSH-Win64"
 [System.Environment]::SetEnvironmentVariable("PATH", $env:PATH + ";C:\OpenSSH\OpenSSH-Win64", "Machine")
 
+# Установить sshpass для автоматического ввода пароля
+$sshpassUrl = "https://github.com/dtulyashov/sshpass-win/releases/download/v1.0/sshpass.exe"
+if (!(Test-Path "C:\OpenSSH\OpenSSH-Win64\sshpass.exe")) {
+    Download-File $sshpassUrl "C:\OpenSSH\OpenSSH-Win64\sshpass.exe" | Out-Null
+}
+
 # --- ШАГ 2: SSH сервер ---
 Write-Host "`n[2/6] Запуск SSH сервера..." -ForegroundColor Yellow
 Start-Service sshd -ErrorAction SilentlyContinue
@@ -52,25 +58,20 @@ Write-Host "SSH сервер запущен!" -ForegroundColor Green
 
 # --- ШАГ 3: SSH ключ ---
 Write-Host "`n[3/6] Создание SSH ключа..." -ForegroundColor Yellow
-
 if (!(Test-Path $sshDir)) {
     New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
 }
 
 $keyCreated = Test-Path "$keyPath.pub"
-
 if (!$keyCreated) {
-    # Метод 1: через echo передаём пустые ответы
     try {
-        $result = echo "" | & $keygenExe -t ed25519 -C "tunnel-key" -f "$keyPath" 2>&1
+        echo "" | & $keygenExe -t ed25519 -C "tunnel-key" -f "$keyPath" 2>&1 | Out-Null
         $keyCreated = Test-Path "$keyPath.pub"
     } catch {}
 }
-
 if (!$keyCreated) {
-    # Метод 2: через cmd
     try {
-        cmd /c "echo.|$keygenExe -t ed25519 -C tunnel-key -f `"$keyPath`""
+        cmd /c "echo.|$keygenExe -t ed25519 -C tunnel-key -f `"$keyPath`"" | Out-Null
         $keyCreated = Test-Path "$keyPath.pub"
     } catch {}
 }
@@ -78,30 +79,69 @@ if (!$keyCreated) {
 if ($keyCreated) {
     $pubKey = Get-Content "$keyPath.pub"
     Write-Host "SSH ключ создан!" -ForegroundColor Green
-    Write-Host $pubKey -ForegroundColor Cyan
 } else {
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Red
-    Write-Host "  СОЗДАЙ КЛЮЧ ВРУЧНУЮ:" -ForegroundColor Red
-    Write-Host "========================================" -ForegroundColor Red
-    Write-Host ""
-    Write-Host "1. Выполни эту команду:" -ForegroundColor Yellow
-    Write-Host "   $keygenExe -t ed25519 -C tunnel-key" -ForegroundColor White
-    Write-Host ""
-    Write-Host "2. На все вопросы жми Enter" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "3. Потом выполни:" -ForegroundColor Yellow
-    Write-Host "   cat $keyPath.pub" -ForegroundColor White
-    Write-Host ""
-    Write-Host "4. Скопируй ключ и добавь на VPS:" -ForegroundColor Yellow
-    Write-Host "   ssh root@$VPS_IP" -ForegroundColor White
-    Write-Host "   echo `"ВАШ_КЛЮЧ`" >> ~/.ssh/authorized_keys" -ForegroundColor White
-    Write-Host ""
-    Write-Host "5. Запусти туннель:" -ForegroundColor Yellow
-    Write-Host "   Start-ScheduledTask -TaskName 'SSH Tunnel'" -ForegroundColor White
-    Write-Host ""
-    $pubKey = "КЛЮЧ_НЕ_СОЗДАН"
+    Write-Host "Не удалось создать ключ автоматически." -ForegroundColor Red
+    Write-Host "Выполни вручную: $keygenExe -t ed25519 -C tunnel-key" -ForegroundColor Yellow
+    Write-Host "Потом запусти скрипт снова." -ForegroundColor Yellow
+    exit 1
 }
+
+# --- Автоматически добавить ключ на VPS ---
+Write-Host "`nДобавляю ключ на VPS автоматически..." -ForegroundColor Cyan
+
+# Установить plink если есть, иначе используем встроенный способ
+$env:SSHPASS = $vpsPassword
+
+# Попробуем через sshpass
+$sshpass = "C:\OpenSSH\OpenSSH-Win64\sshpass.exe"
+$keyAdded = $false
+
+if (Test-Path $sshpass) {
+    try {
+        & $sshpass -e $sshExe -o StrictHostKeyChecking=no root@$VPS_IP "echo '$pubKey' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+        $keyAdded = $true
+        Write-Host "Ключ добавлен на VPS!" -ForegroundColor Green
+    } catch {}
+}
+
+if (!$keyAdded) {
+    # Попробуем через PowerShell SSH с паролем через stdin
+    try {
+        $cmd = "echo '$pubKey' >> ~/.ssh/authorized_keys"
+        echo $vpsPassword | & $sshExe -o StrictHostKeyChecking=no -o PasswordAuthentication=yes root@$VPS_IP $cmd
+        $keyAdded = $true
+        Write-Host "Ключ добавлен на VPS!" -ForegroundColor Green
+    } catch {}
+}
+
+if (!$keyAdded) {
+    Write-Host ""
+    Write-Host "Не удалось добавить ключ автоматически." -ForegroundColor Red
+    Write-Host "Добавь вручную — зайди на VPS и выполни:" -ForegroundColor Yellow
+    Write-Host "echo `"$pubKey`" >> ~/.ssh/authorized_keys" -ForegroundColor White
+    Write-Host ""
+    Read-Host "Нажми Enter когда добавишь ключ на VPS"
+}
+
+# --- Найти свободные порты на VPS ---
+Write-Host "`nИщу свободные порты на VPS..." -ForegroundColor Cyan
+
+function Get-FreeVpsPort {
+    param([int]$StartPort)
+    $port = $StartPort
+    while ($true) {
+        $result = & $sshExe -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$VPS_IP "ss -tlnp 2>/dev/null | grep :$port" 2>$null
+        if ([string]::IsNullOrEmpty($result)) {
+            return $port
+        }
+        $port++
+    }
+}
+
+$SSH_PORT = Get-FreeVpsPort -StartPort 2222
+$VNC_PORT = Get-FreeVpsPort -StartPort 5900
+Write-Host "SSH порт: $SSH_PORT" -ForegroundColor Green
+Write-Host "VNC порт: $VNC_PORT" -ForegroundColor Green
 
 # --- ШАГ 4: VNC ---
 Write-Host "`n[4/6] Установка VNC..." -ForegroundColor Yellow
@@ -116,10 +156,7 @@ if (!$vncInstalled) {
         Set-Service -Name "tvnserver" -StartupType 'Automatic' -ErrorAction SilentlyContinue
         Write-Host "VNC установлен! Пароль: 12345678" -ForegroundColor Green
     } else {
-        Write-Host ""
-        Write-Host "VNC не скачался! Скачай вручную:" -ForegroundColor Red
-        Write-Host "https://www.tightvnc.com/download.php" -ForegroundColor White
-        Write-Host "Установи TightVNC 64-bit, пароль: 12345678" -ForegroundColor Gray
+        Write-Host "VNC не скачался! Скачай вручную: https://www.tightvnc.com/download.php" -ForegroundColor Red
     }
 } else { Write-Host "VNC уже установлен." -ForegroundColor Green }
 
@@ -133,7 +170,7 @@ Write-Host "Порты открыты!" -ForegroundColor Green
 Write-Host "`n[6/6] Создание туннеля..." -ForegroundColor Yellow
 
 Set-Content -Path "C:\ssh_tunnel.bat" -Value ":loop
-`"$sshExe`" -N -R ${SSH_PORT}:localhost:22 -R 5901:localhost:5900 -o ServerAliveInterval=60 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes root@$VPS_IP
+`"$sshExe`" -N -R ${SSH_PORT}:localhost:22 -R ${VNC_PORT}:localhost:5900 -o ServerAliveInterval=60 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes root@$VPS_IP
 timeout /t 10
 goto loop"
 
@@ -142,17 +179,22 @@ $action = New-ScheduledTaskAction -Execute "C:\ssh_tunnel.bat"
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $settings = New-ScheduledTaskSettingsSet -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1)
 Register-ScheduledTask -TaskName "SSH Tunnel" -Action $action -Trigger $trigger -Settings $settings -RunLevel Highest -Force | Out-Null
-Write-Host "Туннель настроен!" -ForegroundColor Green
+
+# Запустить туннель сразу
+Start-ScheduledTask -TaskName "SSH Tunnel"
+
+Write-Host "Туннель запущен!" -ForegroundColor Green
 
 # --- ИТОГ ---
 Write-Host "`n========================================" -ForegroundColor Cyan
-Write-Host "  Готово!" -ForegroundColor Green
+Write-Host "  Всё готово! ПК подключён к VPS!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
-if ($pubKey -ne "КЛЮЧ_НЕ_СОЗДАН") {
-    Write-Host ""
-    Write-Host "Добавь ключ на VPS командой:" -ForegroundColor Red
-    Write-Host "echo `"$pubKey`" >> ~/.ssh/authorized_keys" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "Потом запусти туннель:" -ForegroundColor Cyan
-    Write-Host "Start-ScheduledTask -TaskName 'SSH Tunnel'" -ForegroundColor White
-}
+Write-Host ""
+Write-Host "Порты этого ПК:" -ForegroundColor Cyan
+Write-Host "  SSH: $SSH_PORT" -ForegroundColor Yellow
+Write-Host "  VNC: $VNC_PORT" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "Для подключения к рабочему столу с твоего ПК:" -ForegroundColor Cyan
+Write-Host "1. ssh -L ${VNC_PORT}:localhost:${VNC_PORT} root@$VPS_IP" -ForegroundColor White
+Write-Host "2. VNC Viewer -> localhost:$VNC_PORT" -ForegroundColor White
+Write-Host "3. Пароль VNC: 12345678" -ForegroundColor Yellow
