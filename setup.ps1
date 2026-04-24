@@ -50,7 +50,6 @@ if (!(Test-Path "C:\OpenSSH\OpenSSH-Win64\ssh.exe")) {
     Write-Host "OpenSSH уже установлен." -ForegroundColor Green
 }
 
-# Добавить OpenSSH в PATH
 $env:PATH += ";C:\OpenSSH\OpenSSH-Win64"
 [System.Environment]::SetEnvironmentVariable("PATH", $env:PATH + ";C:\OpenSSH\OpenSSH-Win64", "Machine")
 
@@ -70,50 +69,61 @@ if (!(Test-Path $sshDir)) {
 }
 
 if (!(Test-Path $keyPath)) {
-    Push-Location $sshDir
-    & "C:\OpenSSH\OpenSSH-Win64\ssh-keygen.exe" -t ed25519 -C "tunnel-key" -N "" -f "$keyPath"
-    Pop-Location
+    # Используем cmd чтобы избежать проблем с кавычками в PowerShell
+    cmd /c "C:\OpenSSH\OpenSSH-Win64\ssh-keygen.exe -t ed25519 -C tunnel-key -N """" -f ""$keyPath"""
 }
 
 if (Test-Path "$keyPath.pub") {
     $pubKey = Get-Content "$keyPath.pub"
     Write-Host "SSH ключ создан!" -ForegroundColor Green
 } else {
-    Write-Host "Ошибка создания ключа!" -ForegroundColor Red
-    $pubKey = "КЛЮЧ_НЕ_СОЗДАН"
+    Write-Host "Ошибка создания ключа! Создаём через интерактивный режим..." -ForegroundColor Red
+    Write-Host "Нажимай Enter на все вопросы!" -ForegroundColor Yellow
+    & "C:\OpenSSH\OpenSSH-Win64\ssh-keygen.exe" -t ed25519 -C "tunnel-key"
+    if (Test-Path "$keyPath.pub") {
+        $pubKey = Get-Content "$keyPath.pub"
+    } else {
+        $pubKey = "КЛЮЧ_НЕ_СОЗДАН"
+    }
 }
 
-# --- ШАГ 4: Установка TigerVNC ---
-Write-Host "`n[4/6] Установка TigerVNC..." -ForegroundColor Yellow
+# --- ШАГ 4: Установка TightVNC (более стабильный) ---
+Write-Host "`n[4/6] Установка VNC..." -ForegroundColor Yellow
 
 $vncInstalled = $false
-if (Test-Path "C:\Program Files\TigerVNC\winvnc4.exe") { $vncInstalled = $true }
-if (Get-Service "winvnc4" -ErrorAction SilentlyContinue) { $vncInstalled = $true }
+if (Get-Service "tvnserver" -ErrorAction SilentlyContinue) { $vncInstalled = $true }
 
 if (!$vncInstalled) {
-    Write-Host "Скачиваю TigerVNC..." -ForegroundColor Gray
+    Write-Host "Скачиваю TightVNC..." -ForegroundColor Gray
 
     $vncUrls = @(
-        "https://github.com/TigerVNC/tigervnc/releases/download/v1.13.1/tigervnc64-1.13.1.exe",
-        "https://sourceforge.net/projects/tigervnc/files/stable/1.13.1/tigervnc64-1.13.1.exe/download"
+        "https://www.tightvnc.com/download/2.8.85/tightvnc-2.8.85-gpl-setup-64bit.msi",
+        "https://github.com/TigerVNC/tigervnc/releases/download/v1.13.1/tigervnc64-1.13.1.exe"
     )
 
     $downloaded = $false
+    $isMsi = $false
     foreach ($url in $vncUrls) {
         Write-Host "Пробую: $url" -ForegroundColor Gray
-        if (Download-File $url "C:\tigervnc.exe") {
+        $outFile = if ($url -like "*.msi") { "C:\vnc_setup.msi" } else { "C:\vnc_setup.exe" }
+        if (Download-File $url $outFile) {
             $downloaded = $true
+            $isMsi = $url -like "*.msi"
             break
         }
     }
 
     if ($downloaded) {
-        Start-Process "C:\tigervnc.exe" -ArgumentList "/silent /install" -Wait
-        Write-Host "TigerVNC установлен!" -ForegroundColor Green
-        Start-Service "winvnc4" -ErrorAction SilentlyContinue
-        Set-Service -Name "winvnc4" -StartupType 'Automatic' -ErrorAction SilentlyContinue
+        if ($isMsi) {
+            Start-Process msiexec.exe -ArgumentList "/i C:\vnc_setup.msi /quiet /norestart ADDLOCAL=Server SET_USEVNCAUTHENTICATION=1 VALUE_OF_USEVNCAUTHENTICATION=1 SET_PASSWORD=1 VALUE_OF_PASSWORD=12345678" -Wait
+        } else {
+            Start-Process "C:\vnc_setup.exe" -ArgumentList "/silent /install" -Wait
+        }
+        Write-Host "VNC установлен! Пароль: 12345678" -ForegroundColor Green
+        Start-Service "tvnserver" -ErrorAction SilentlyContinue
+        Set-Service -Name "tvnserver" -StartupType 'Automatic' -ErrorAction SilentlyContinue
     } else {
-        Write-Host "Не удалось скачать TigerVNC. Пропускаю..." -ForegroundColor Red
+        Write-Host "Не удалось скачать VNC. Установи вручную с сайта tightvnc.com" -ForegroundColor Red
     }
 } else {
     Write-Host "VNC уже установлен." -ForegroundColor Green
