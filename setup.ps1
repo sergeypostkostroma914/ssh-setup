@@ -149,13 +149,8 @@ if (Test-Path $rustdeskExe) {
         New-Item -ItemType Directory -Path (Split-Path $rdConfig) -Force | Out-Null
     }
     # Установить пароль и включить unattended режим
-    Set-Content -Path $rdConfig -Value @"
-[options]
-allow-auto-disconnect = "N"
-approve-mode = "password"
-access-model = "full_access"
-verification-method = "use-fixed-password"
-"@
+    $rdToml = "[options]" + [Environment]::NewLine + 'allow-auto-disconnect = "N"' + [Environment]::NewLine + 'approve-mode = "password"' + [Environment]::NewLine + 'access-model = "full_access"' + [Environment]::NewLine + 'verification-method = "use-fixed-password"'
+    Set-Content -Path $rdConfig -Value $rdToml
 
     # Установить пароль через реестр
     reg add "HKLM\SOFTWARE\RustDesk" /v Password /t REG_SZ /d "12345678" /f | Out-Null
@@ -212,5 +207,4 @@ if ($rdId) {
     Write-Host "1. Установи RustDesk: https://rustdesk.com" -ForegroundColor White
     Write-Host "2. На удалённом ПК открой RustDesk и посмотри ID" -ForegroundColor White
     Write-Host "3. Введи ID на своём ПК, пароль: 12345678" -ForegroundColor White
-}
 }
