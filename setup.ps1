@@ -89,7 +89,7 @@ try {
     echo $vpsPassword | & $sshExe -o StrictHostKeyChecking=no -o PasswordAuthentication=yes root@$VPS_IP $cmd 2>$null
     Write-Host "Ключ добавлен!" -ForegroundColor Green
 } catch {
-    Write-Host "Добавь вручную:" -ForegroundColor Red
+    Write-Host "Добавь вручную на VPS:" -ForegroundColor Red
     Write-Host "echo `"$pubKey`" >> ~/.ssh/authorized_keys" -ForegroundColor Yellow
     Read-Host "Нажми Enter когда добавишь"
 }
@@ -113,34 +113,76 @@ Write-Host "SSH порт: $SSH_PORT" -ForegroundColor Green
 # --- ШАГ 4: RustDesk ---
 Write-Host "`n[4/5] Установка RustDesk..." -ForegroundColor Yellow
 
-$rustdeskInstalled = Test-Path "C:\Program Files\RustDesk\RustDesk.exe"
+$rustdeskExe = "C:\Program Files\RustDesk\RustDesk.exe"
+$rustdeskInstalled = Test-Path $rustdeskExe
 
 if (!$rustdeskInstalled) {
-    Write-Host "Скачиваю RustDesk с GitHub..." -ForegroundColor Gray
-    $rdUrl = "https://github.com/rustdesk/rustdesk/releases/download/1.2.6/rustdesk-1.2.6-x86_64.exe"
-    
-    if (Download-File $rdUrl "C:\rustdesk_setup.exe") {
-        Write-Host "Устанавливаю RustDesk..." -ForegroundColor Gray
-        Start-Process "C:\rustdesk_setup.exe" -ArgumentList "--silent-install" -Wait
-        Write-Host "RustDesk установлен!" -ForegroundColor Green
-    } else {
-        Write-Host "Не удалось скачать! Попробую другую версию..." -ForegroundColor Red
-        $rdUrl2 = "https://github.com/rustdesk/rustdesk/releases/download/1.2.4/rustdesk-1.2.4-x86_64.exe"
-        if (Download-File $rdUrl2 "C:\rustdesk_setup.exe") {
-            Start-Process "C:\rustdesk_setup.exe" -ArgumentList "--silent-install" -Wait
+    Write-Host "Скачиваю RustDesk..." -ForegroundColor Gray
+
+    $downloaded = $false
+    $urls = @(
+        "https://github.com/rustdesk/rustdesk/releases/download/1.2.6/rustdesk-1.2.6-x86_64.exe",
+        "https://github.com/rustdesk/rustdesk/releases/download/1.2.4/rustdesk-1.2.4-x86_64.exe"
+    )
+
+    foreach ($url in $urls) {
+        Write-Host "Пробую: $url" -ForegroundColor Gray
+        if (Download-File $url "C:\rustdesk_setup.exe") {
+            $downloaded = $true
+            break
+        }
+    }
+
+    if ($downloaded) {
+        Write-Host "Устанавливаю RustDesk (без иконок, тихо)..." -ForegroundColor Gray
+
+        # Запуск с таймаутом 60 секунд чтобы не зависало
+        $proc = Start-Process "C:\rustdesk_setup.exe" -ArgumentList `
+            "--silent-install", `
+            "--no-desktop-shortcut", `
+            "--no-quick-access-shortcut" `
+            -PassThru -WindowStyle Hidden
+
+        $timeout = 60
+        $proc | Wait-Process -Timeout $timeout -ErrorAction SilentlyContinue
+        if (!$proc.HasExited) {
+            $proc.Kill()
+            Write-Host "Установка заняла слишком долго, принудительно завершена." -ForegroundColor Yellow
+        }
+
+        # Убрать иконки с рабочего стола
+        $desktopPaths = @(
+            "$env:PUBLIC\Desktop\RustDesk.lnk",
+            "$env:USERPROFILE\Desktop\RustDesk.lnk"
+        )
+        foreach ($icon in $desktopPaths) {
+            if (Test-Path $icon) { Remove-Item $icon -Force }
+        }
+
+        if (Test-Path $rustdeskExe) {
             Write-Host "RustDesk установлен!" -ForegroundColor Green
         } else {
-            Write-Host "Не удалось установить RustDesk!" -ForegroundColor Red
+            Write-Host "RustDesk не установился." -ForegroundColor Red
         }
+    } else {
+        Write-Host "Не удалось скачать RustDesk!" -ForegroundColor Red
     }
 } else {
     Write-Host "RustDesk уже установлен." -ForegroundColor Green
+    # Убрать иконки если есть
+    $desktopPaths = @(
+        "$env:PUBLIC\Desktop\RustDesk.lnk",
+        "$env:USERPROFILE\Desktop\RustDesk.lnk"
+    )
+    foreach ($icon in $desktopPaths) {
+        if (Test-Path $icon) { Remove-Item $icon -Force }
+    }
 }
 
-# Запустить RustDesk как службу
-$rustdeskExe = "C:\Program Files\RustDesk\RustDesk.exe"
+# Запустить как службу
 if (Test-Path $rustdeskExe) {
-    Start-Process $rustdeskExe -ArgumentList "--install-service" -Wait -ErrorAction SilentlyContinue
+    & $rustdeskExe --install-service 2>$null
+    Start-Sleep -Seconds 2
     Start-Service "RustDesk" -ErrorAction SilentlyContinue
     Set-Service -Name "RustDesk" -StartupType 'Automatic' -ErrorAction SilentlyContinue
 }
@@ -166,27 +208,27 @@ Write-Host "Туннель запущен!" -ForegroundColor Green
 # Получить ID RustDesk
 Start-Sleep -Seconds 3
 $rdId = ""
-try {
-    $rdId = & $rustdeskExe --get-id 2>$null
-} catch {}
+if (Test-Path $rustdeskExe) {
+    try { $rdId = (& $rustdeskExe --get-id 2>$null).Trim() } catch {}
+}
 
 # --- ИТОГ ---
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "  Всё готово!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "SSH порт туннеля: $SSH_PORT" -ForegroundColor Yellow
+Write-Host "SSH порт: $SSH_PORT" -ForegroundColor Yellow
 if ($rdId) {
     Write-Host "RustDesk ID: $rdId" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "Для подключения:" -ForegroundColor Cyan
-    Write-Host "1. Установи RustDesk на своём ПК" -ForegroundColor White
+    Write-Host "Для подключения с твоего ПК:" -ForegroundColor Cyan
+    Write-Host "1. Установи RustDesk: https://rustdesk.com" -ForegroundColor White
     Write-Host "2. Введи ID: $rdId" -ForegroundColor White
     Write-Host "3. Подключись!" -ForegroundColor White
 } else {
     Write-Host ""
     Write-Host "Для подключения:" -ForegroundColor Cyan
-    Write-Host "1. Установи RustDesk на своём ПК" -ForegroundColor White
+    Write-Host "1. Установи RustDesk: https://rustdesk.com" -ForegroundColor White
     Write-Host "2. На удалённом ПК открой RustDesk и посмотри ID" -ForegroundColor White
-    Write-Host "3. Введи этот ID на своём ПК и подключись" -ForegroundColor White
+    Write-Host "3. Введи этот ID на своём ПК" -ForegroundColor White
 }
