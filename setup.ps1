@@ -109,7 +109,7 @@ if (Test-Path $rustdeskExe) {
             $webClient = New-Object System.Net.WebClient
             $webClient.DownloadFile($asset.browser_download_url, "C:\rustdesk_setup.exe")
             $fileSize = (Get-Item "C:\rustdesk_setup.exe").Length
-            if ($fileSize -gt 1MB) { $downloaded = $true }
+            if ($fileSize -gt 500KB) { $downloaded = $true }
         }
     } catch {}
 
@@ -126,7 +126,7 @@ if (Test-Path $rustdeskExe) {
                 $webClient = New-Object System.Net.WebClient
                 $webClient.DownloadFile($url, "C:\rustdesk_setup.exe")
                 $fileSize = (Get-Item "C:\rustdesk_setup.exe" -ErrorAction SilentlyContinue).Length
-                if ($fileSize -gt 1MB) {
+                if ($fileSize -gt 500KB) {
                     $downloaded = $true
                     break
                 }
