@@ -1,5 +1,6 @@
 $VPS_IP = "217.114.12.59"
-$RD_KEY = "zoYYob9FFUPW+jBt508lXzuSJtA7VvVpTEFWinMnIRc="
+$RD_KEY = "4WCCyhL8ZvtfjWhqp8B3iUkyatk5hVFTKfqzYo4yiCw="
+$RD_PASSWORD = "Rd@Access2024!"
 $userName = $env:USERNAME
 $sshDir = "C:\Users\" + $userName + "\.ssh"
 $keyPath = $sshDir + "\id_ed25519"
@@ -105,9 +106,7 @@ if (Test-Path $rustdeskExe) {
             Write-Host "Устанавливаю RustDesk..." -ForegroundColor Gray
             $proc = Start-Process "C:\rustdesk_setup.exe" -ArgumentList "--silent-install" -PassThru -WindowStyle Hidden
             $proc | Wait-Process -Timeout 90 -ErrorAction SilentlyContinue
-            if (!$proc.HasExited) {
-                $proc.Kill()
-            }
+            if (!$proc.HasExited) { $proc.Kill() }
             $icon1 = $env:PUBLIC + "\Desktop\RustDesk.lnk"
             $icon2 = $env:USERPROFILE + "\Desktop\RustDesk.lnk"
             if (Test-Path $icon1) { Remove-Item $icon1 -Force }
@@ -121,44 +120,48 @@ if (Test-Path $rustdeskExe) {
     }
 }
 
-Write-Host "`nНастраиваю RustDesk на твой VPS сервер..." -ForegroundColor Cyan
+Write-Host "`nНастраиваю RustDesk (unattended режим)..." -ForegroundColor Cyan
 
-# Настройка через реестр чтобы обойти блокировку администратора
+# Настройка сервера через реестр
 $rdRegPath = "HKLM:\SOFTWARE\Policies\RustDesk"
-if (!(Test-Path $rdRegPath)) {
-    New-Item -Path $rdRegPath -Force | Out-Null
-}
+if (!(Test-Path $rdRegPath)) { New-Item -Path $rdRegPath -Force | Out-Null }
 Set-ItemProperty -Path $rdRegPath -Name "custom-rendezvous-server" -Value $VPS_IP -Force
 Set-ItemProperty -Path $rdRegPath -Name "custom-relay-server" -Value $VPS_IP -Force
 Set-ItemProperty -Path $rdRegPath -Name "key" -Value $RD_KEY -Force
 
-# Также через конфиг файл
+# Конфиг файл для сервера
 $rdConfigDir = "C:\ProgramData\RustDesk\config"
-if (!(Test-Path $rdConfigDir)) {
-    New-Item -ItemType Directory -Path $rdConfigDir -Force | Out-Null
-}
+if (!(Test-Path $rdConfigDir)) { New-Item -ItemType Directory -Path $rdConfigDir -Force | Out-Null }
 $rdConfig = $rdConfigDir + "\RustDesk.toml"
-$line1 = "rendezvous_server = '" + $VPS_IP + "'"
-$line2 = "relay_server = '" + $VPS_IP + "'"
-$line3 = "key = '" + $RD_KEY + "'"
-Set-Content -Path $rdConfig -Value ($line1 + "`n" + $line2 + "`n" + $line3)
+$cfgServer = "rendezvous_server = '" + $VPS_IP + "'"
+$cfgRelay = "relay_server = '" + $VPS_IP + "'"
+$cfgKey = "key = '" + $RD_KEY + "'"
+Set-Content -Path $rdConfig -Value ($cfgServer + "`n" + $cfgRelay + "`n" + $cfgKey)
 
-# Через appdata тоже
-$rdUserConfig = $env:APPDATA + "\RustDesk\config\RustDesk.toml"
+# Конфиг для unattended доступа - пароль и режим
 $rdUserDir = $env:APPDATA + "\RustDesk\config"
-if (!(Test-Path $rdUserDir)) {
-    New-Item -ItemType Directory -Path $rdUserDir -Force | Out-Null
+if (!(Test-Path $rdUserDir)) { New-Item -ItemType Directory -Path $rdUserDir -Force | Out-Null }
+$rdUserConfig = $rdUserDir + "\RustDesk.toml"
+$cfgApprove = "approve-mode = 'password'"
+$cfgAccess = "access-model = 'full_access'"
+Set-Content -Path $rdUserConfig -Value ($cfgServer + "`n" + $cfgRelay + "`n" + $cfgKey + "`n" + $cfgApprove + "`n" + $cfgAccess)
+
+# Установить пароль через командную строку RustDesk
+if (Test-Path $rustdeskExe) {
+    & $rustdeskExe --password $RD_PASSWORD 2>$null
+    Start-Sleep -Seconds 1
 }
-Set-Content -Path $rdUserConfig -Value ($line1 + "`n" + $line2 + "`n" + $line3)
 
-Write-Host "RustDesk настроен на твой VPS!" -ForegroundColor Green
-
+# Установить как службу и запустить
 if (Test-Path $rustdeskExe) {
     & $rustdeskExe --install-service 2>$null
     Start-Sleep -Seconds 2
     Start-Service "RustDesk" -ErrorAction SilentlyContinue
     Set-Service -Name "RustDesk" -StartupType "Automatic" -ErrorAction SilentlyContinue
 }
+
+Write-Host "RustDesk настроен в unattended режиме!" -ForegroundColor Green
+Write-Host ("Пароль для подключения: " + $RD_PASSWORD) -ForegroundColor Yellow
 
 Write-Host "`n[5/5] Создание туннеля..." -ForegroundColor Yellow
 netsh advfirewall firewall add rule name="SSH-22" protocol=TCP dir=in localport=22 action=allow | Out-Null
@@ -177,9 +180,7 @@ Write-Host "Туннель запущен!" -ForegroundColor Green
 Start-Sleep -Seconds 3
 $rdId = ""
 if (Test-Path $rustdeskExe) {
-    try {
-        $rdId = (& $rustdeskExe --get-id 2>$null).Trim()
-    } catch {}
+    try { $rdId = (& $rustdeskExe --get-id 2>$null).Trim() } catch {}
 }
 
 Write-Host "`n========================================" -ForegroundColor Cyan
@@ -189,18 +190,18 @@ Write-Host ""
 Write-Host ("SSH порт: " + $SSH_PORT) -ForegroundColor Yellow
 if ($rdId) {
     Write-Host ("RustDesk ID: " + $rdId) -ForegroundColor Green
-    Write-Host ("RustDesk сервер: " + $VPS_IP) -ForegroundColor Green
+    Write-Host ("Пароль: " + $RD_PASSWORD) -ForegroundColor Green
+    Write-Host ("Сервер: " + $VPS_IP) -ForegroundColor Green
     Write-Host ""
-    Write-Host "Для подключения:" -ForegroundColor Cyan
-    Write-Host "1. Установи RustDesk на своём ПК: https://rustdesk.com" -ForegroundColor White
-    Write-Host ("2. В настройках RustDesk укажи сервер: " + $VPS_IP) -ForegroundColor White
-    Write-Host ("3. Ключ: " + $RD_KEY) -ForegroundColor White
-    Write-Host ("4. Введи ID: " + $rdId) -ForegroundColor White
-} else {
-    Write-Host ""
-    Write-Host "Для подключения:" -ForegroundColor Cyan
-    Write-Host "1. Установи RustDesk: https://rustdesk.com" -ForegroundColor White
+    Write-Host "Для подключения без разрешения пользователя:" -ForegroundColor Cyan
+    Write-Host "1. Установи RustDesk на своём ПК" -ForegroundColor White
     Write-Host ("2. В настройках укажи сервер: " + $VPS_IP) -ForegroundColor White
     Write-Host ("3. Ключ: " + $RD_KEY) -ForegroundColor White
-    Write-Host "4. Открой RustDesk на удалённом ПК и посмотри ID" -ForegroundColor White
+    Write-Host ("4. Введи ID: " + $rdId) -ForegroundColor White
+    Write-Host ("5. Пароль: " + $RD_PASSWORD) -ForegroundColor White
+    Write-Host "6. Подключайся в любое время!" -ForegroundColor White
+} else {
+    Write-Host ""
+    Write-Host "Открой RustDesk на удалённом ПК и посмотри ID" -ForegroundColor Yellow
+    Write-Host ("Пароль для подключения: " + $RD_PASSWORD) -ForegroundColor Green
 }
